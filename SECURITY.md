@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-There are no versioned releases. Security fixes go into the latest commit on `main` only, so please make
-sure you're on it before reporting.
+Only the latest release is supported. Security fixes go into `main` first and ship in the next release,
+so please check that you're on the latest release (or `main`) before reporting.
 
 ## Reporting a vulnerability
 
