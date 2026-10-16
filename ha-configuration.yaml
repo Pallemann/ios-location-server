@@ -1,0 +1,7 @@
+default_config:
+
+# Only needed behind a reverse proxy: put the proxy's IP into trusted_proxies.
+# http:
+#   use_x_forwarded_for: true
+#   trusted_proxies:
+#     - 172.18.0.2

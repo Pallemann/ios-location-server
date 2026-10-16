@@ -1,0 +1,31 @@
+# Location service + PWA. Optional Home Assistant add-on: docker-compose.ha.yml (see README).
+# Remove everything again with:  docker compose down -v --rmi local
+name: ios-location-server
+
+services:
+  ios-location:
+    build: .
+    container_name: ios-location
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 512m
+    environment:
+      - TZ=${TZ:-UTC}
+      - PHONE_IP=${PHONE_IP:?set PHONE_IP in .env}
+      - IDLE_TIMEOUT_MINUTES=${IDLE_TIMEOUT_MINUTES:-60}
+      - HA_URL=${HA_URL:-}
+      - HA_TOKEN=${HA_TOKEN:-}
+      - HA_NOTIFY=${HA_NOTIFY:-}
+    volumes:
+      - ./pair_record.plist:/pair_record.plist:ro
+      - data:/data
+    ports:
+      # The service has no login. Keep it on localhost and put an HTTPS reverse proxy in front.
+      - "127.0.0.1:${PORT:-8000}:8000"
+
+volumes:
+  data:

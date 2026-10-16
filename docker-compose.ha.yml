@@ -1,0 +1,25 @@
+# Optional: a separate, throwaway Home Assistant that mirrors the status into an iOS Live Activity.
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+services:
+  ios-location:
+    environment:
+      - HA_URL=http://ios-location-ha:8123
+
+  ios-location-ha:
+    # Pinned on purpose: Live Activities need Core >= 2026.7, and a shared :stable tag may be stale.
+    image: ghcr.io/home-assistant/home-assistant:2026.10.1
+    container_name: ios-location-ha
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    environment:
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ha-config:/config
+      - ./ha-configuration.yaml:/config/configuration.yaml:ro
+    ports:
+      - "${HA_PORT:-8124}:8123"
+
+volumes:
+  ha-config:

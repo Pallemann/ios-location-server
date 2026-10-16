@@ -1,0 +1,5 @@
+# Secrets: never commit these
+.env
+*.plist
+
+__pycache__/

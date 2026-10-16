@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Location">
+<meta name="theme-color" content="#0b1220">
+<title>iPhone Location</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root { --bg: #ffffff; --fg: #111827; --muted: #6b7280; --card: rgba(255,255,255,.94); --accent: #2563eb;
+          --ok: #16a34a; --warn: #d97706; --off: #9ca3af; --track: #d1d5db; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b1220; --fg: #f3f4f6; --muted: #9ca3af; --card: rgba(17,24,39,.94); --track: #374151; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+               font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #map { position: fixed; inset: 0; }
+  .card { position: fixed; left: 12px; right: 12px; z-index: 1000; background: var(--card);
+          border-radius: 14px; padding: 12px 14px; box-shadow: 0 4px 18px rgba(0,0,0,.18);
+          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  #top { top: calc(env(safe-area-inset-top) + 8px); }
+  #bottom { bottom: calc(env(safe-area-inset-bottom) + 12px); display: flex; align-items: center; gap: 10px; }
+  .toggles { display: flex; gap: 16px; }
+  label.switch { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; }
+  .switch input { appearance: none; -webkit-appearance: none; width: 50px; height: 30px; border-radius: 15px;
+                  background: var(--track); position: relative; margin: 0; transition: background .2s; flex: none; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px;
+                         border-radius: 50%; background: #fff; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .switch input:checked { background: var(--ok); }
+  .switch input:checked::after { transform: translateX(20px); }
+  .switch input:disabled { opacity: .5; }
+  #status { margin-top: 8px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
+  #coords { flex: 1; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #coords b { color: var(--fg); font-weight: 600; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 10px 14px; color: #fff; background: var(--accent); }
+  button:disabled { opacity: .4; }
+  #locate { background: transparent; color: var(--accent); padding: 10px 6px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="top" class="card">
+  <div class="toggles">
+    <label class="switch">Service <input id="service" type="checkbox" role="switch"></label>
+    <label class="switch">Fake location <input id="spoof" type="checkbox" role="switch"></label>
+  </div>
+  <div id="status"><span id="dot"></span><span id="status-text">Loading…</span></div>
+</div>
+
+<div id="bottom" class="card">
+  <div id="coords"></div>
+  <button id="locate" title="Center on the position the phone reports">◎</button>
+  <button id="apply" disabled>Move here</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const fmt = (ll) => `${ll.lat.toFixed(6)}, ${ll.lng.toFixed(6)}`;
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  };
+  const r = await fetch(`api/${path}`, opts);
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  return r.json();
+}
+
+const map = L.map("map", { zoomControl: false, attributionControl: true });
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+const target = L.marker([0, 0], { draggable: true }).addTo(map);
+const me = L.circleMarker([0, 0], { radius: 7, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 1 })
+  .bindTooltip("Position the phone reports");
+
+let pending = null;   // pin moved but not applied yet
+let centered = false;
+
+function render(s) {
+  $("#service").checked = s.service;
+  $("#spoof").checked = s.spoof;
+  const [color, text] = {
+    connected: ["var(--ok)", "Connected"],
+    searching: ["var(--warn)", "Searching for iPhone…"],
+    off: ["var(--off)", "Service off"],
+  }[s.status];
+  $("#dot").style.background = color;
+  $("#status-text").textContent = s.idle_off_in != null
+    ? `${text} · auto-off in ${Math.ceil(s.idle_off_in / 60)} min` : text;
+  const active = L.latLng(s.lat, s.lon);
+  if (!pending) target.setLatLng(active);
+  if (!centered) { map.setView(active, 15); centered = true; }
+  $("#coords").innerHTML = pending
+    ? `New: <b>${fmt(pending)}</b>` : `Fake: <b>${fmt(active)}</b>`;
+  $("#apply").disabled = !pending;
+}
+
+function showError(e) {
+  $("#dot").style.background = "#dc2626";
+  $("#status-text").textContent = `Error: ${e.message}`;
+}
+
+const refresh = () => api("state").then(render).catch(showError);
+
+function pick(latlng) {
+  pending = latlng;
+  target.setLatLng(latlng);
+  refresh();
+}
+map.on("click", (e) => pick(e.latlng));
+target.on("dragend", () => pick(target.getLatLng()));
+
+$("#apply").addEventListener("click", async () => {
+  try {
+    const s = await api("location", { lat: pending.lat, lon: pending.lng });
+    pending = null;
+    render(s);
+  } catch (e) { showError(e); }
+});
+
+for (const id of ["service", "spoof"]) {
+  const box = $(`#${id}`);
+  box.addEventListener("change", async () => {
+    box.disabled = true;
+    try { render(await api(id, { on: box.checked })); }
+    catch (e) { showError(e); refresh(); }
+    finally { box.disabled = false; }
+  });
+}
+
+$("#locate").addEventListener("click", () => {
+  if (map.hasLayer(me)) map.setView(me.getLatLng(), Math.max(map.getZoom(), 15));
+});
+
+if ("geolocation" in navigator) {
+  navigator.geolocation.watchPosition(
+    (p) => me.setLatLng([p.coords.latitude, p.coords.longitude]).addTo(map),
+    () => me.remove(),
+    { enableHighAccuracy: true, maximumAge: 5000 },
+  );
+}
+
+refresh();
+setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 3000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
+</script>
+</body>
+</html>
