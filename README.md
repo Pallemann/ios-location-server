@@ -1,9 +1,13 @@
-# ios-location-server
+# iOS Location Server
 
 Self-hosted, hands-free location simulation for an iPhone on your home Wi-Fi. A small Docker container
 on your server holds a simulated GPS location on the phone, with no cable and no desktop app running. You
 control it from a PWA on the phone itself: drag a pin on a map, and toggle the service and the fake
 location on and off.
+
+<p align="center">
+  <img src="docs/screenshot.png" width="300" alt="The PWA: Service and Fake location toggles, status Connected, and a map with the fake-location pin">
+</p>
 
 - **Wi-Fi only, no root.** The container runs non-root, with all capabilities dropped and a read-only
   filesystem. It needs no host networking, `NET_ADMIN` or `/dev/net/tun`.
@@ -11,7 +15,7 @@ location on and off.
   image after a reboot.
 - **Failswitch.** It turns itself off after 60 minutes without a connection (configurable).
 - **Optional Live Activity.** It can mirror its status ("Connected", "Searching…") onto the lock screen
-  through a throwaway Home Assistant instance.
+  through Home Assistant, either your existing instance or a throwaway one.
 
 > Tested with an iPhone 11 on iOS 18.5, pymobiledevice3 11.27.2, and an Ubuntu server running Docker. It
 > needs iOS 17.4 or newer. Other setups may work but are untested.
@@ -22,11 +26,8 @@ The service is built on [pymobiledevice3](https://github.com/doronz88/pymobilede
 
 1. It connects to the phone's lockdown service over Wi-Fi, using a **pairing file** copied from a computer
    the phone already trusts.
-2. It keeps the phone's **heartbeat** service alive. The phone sends `Marco` every ~10 s and expects
-   `Polo`. **iOS refuses Wi-Fi developer tunnels from a host that isn't heartbeating.** I haven't found
-   this documented anywhere. On Windows, Apple's own background service (Apple Mobile Device Service)
-   keeps a heartbeat running for the same pairing, so tools running next to it work without sending one.
-   As soon as that PC shut down, the phone dropped the tunnel and refused new ones.
+2. It keeps the phone's **heartbeat** service alive, which iOS requires before it accepts a Wi-Fi
+   developer tunnel (see [Why the heartbeat matters](#why-the-heartbeat-matters)).
 3. It opens the iOS 17.4+ CoreDeviceProxy tunnel through pymobiledevice3's pure-Python **userspace
    network stack**, which is why no root or TUN device is needed.
 4. It mounts the developer disk image if needed, then re-sends the location every 5 s over the DVT
@@ -35,6 +36,10 @@ The service is built on [pymobiledevice3](https://github.com/doronz88/pymobilede
 About 100 s after you lock the phone, it goes into deep sleep. It sends `SleepyTime` and ends the tunnel
 itself, so **the simulated location doesn't survive deep sleep**. The service retries, and reconnects
 within a few seconds of the phone waking up.
+
+If the phone stays unreachable for 60 minutes (`IDLE_TIMEOUT_MINUTES`), the service switches itself off.
+It then stops retrying, ends the Live Activity and sends nothing more until you switch it back on in the
+PWA.
 
 ## Requirements
 
@@ -75,7 +80,7 @@ sudo chown 1000 pair_record.plist && chmod 600 pair_record.plist
 ```
 
 > **The pairing file is a key to your phone.** Anyone holding it can use developer services on the phone
-> while on the same network. Treat it like an SSH private key. It's listed in `.gitignore`.
+> while on the same network. Treat it like an SSH private key.
 
 ### 3. Allow Wi-Fi connections
 
@@ -131,26 +136,50 @@ Then open the URL in Safari on the phone → Share → **Add to Home Screen**, a
 
 ## Optional: Live Activity via Home Assistant
 
-The service can push its status into an iOS Live Activity through the Home Assistant Companion app. To
-keep this away from a production Home Assistant, `docker-compose.ha.yml` starts a separate, throwaway
-instance.
+The service can push its status into an iOS Live Activity through the Home Assistant Companion app. You
+can use the Home Assistant you already run, or start a separate, throwaway one.
 
-Requirements: Home Assistant Core **2026.7+** (the compose file pins 2026.10.1), Companion app **2026.9+**,
+Requirements: Home Assistant Core **2026.7+**, Companion app **2026.9+** with notifications allowed, and
 iOS 17.2+.
+
+### Option A: your existing Home Assistant
+
+No extra container needed. The service only calls Home Assistant's notify API.
+
+1. Make sure the phone's Companion app is logged in to that Home Assistant.
+2. Create a long-lived access token: Profile → Security → Long-lived access tokens. A token carries all of
+   its user's rights and can't be limited to notifications, so consider a dedicated user for it.
+3. [Find the notify service name](#finding-the-notify-service).
+4. Set these in `.env`, then run `docker compose up -d`:
+   - `HA_URL`: the address of your Home Assistant **as seen from the container**, e.g.
+     `http://192.168.1.10:8123` or `https://ha.example.com`. `localhost` won't work, because inside the
+     container it means the container itself.
+   - `HA_TOKEN`: the token from step 2.
+   - `HA_NOTIFY`: the notify service name, without `notify.`.
+
+### Option B: a separate, throwaway Home Assistant
+
+`docker-compose.ha.yml` starts its own Home Assistant (pinned to 2026.10.1), so nothing touches your
+production instance. Removing the project removes it too.
 
 1. Start both containers:
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d --build
    ```
 2. Open `http://<server>:8124`, create the owner account, then log in to that instance from the Companion
-   app on the phone and **allow notifications**.
+   app on the phone.
 3. Create a long-lived access token: Profile → Security → Long-lived access tokens.
-4. Find the notify service: Settings → Developer tools → Actions, then search `notify.mobile_app_`.
-5. Set `HA_TOKEN` and `HA_NOTIFY` (the name without `notify.`) in `.env`, then run the command from step 1
-   again.
+4. [Find the notify service name](#finding-the-notify-service).
+5. Set `HA_TOKEN` and `HA_NOTIFY` in `.env` (`HA_URL` is set by `docker-compose.ha.yml`), then run the
+   command from step 1 again.
 
-The notify service name follows the phone's name in the Companion app. If you rename the phone or log in
-again, update `HA_NOTIFY`.
+### Finding the notify service
+
+In Home Assistant: Settings → Developer tools → Actions, then search for `notify.mobile_app_`. The entry
+for your phone, e.g. `notify.mobile_app_my_iphone`, gives you `HA_NOTIFY=mobile_app_my_iphone`.
+
+The name follows the phone's name in the Companion app. If you rename the phone or log in again, update
+`HA_NOTIFY`.
 
 ## Using it
 
@@ -198,7 +227,19 @@ Reset Location & Privacy) and turn Developer Mode off.
 - **Third-party requests.** The PWA loads Leaflet from unpkg (with integrity hashes) and map tiles from
   OpenStreetMap.
 - **Games.** Spoofing your location in games such as Pokémon GO violates their terms of service and can
-  get your account banned.
+  get your account banned. Was not tested.
+
+## Why the heartbeat matters
+
+The phone's heartbeat service (`com.apple.mobile.heartbeat`) sends `Marco` about every 10 s and expects
+`Polo` back. iOS only accepts a Wi-Fi developer tunnel from a host that keeps this exchange running, and
+drops an existing tunnel as soon as it stops. I haven't found this documented anywhere.
+
+On Windows, Apple's own background service (Apple Mobile Device Service) keeps a heartbeat running for the
+pairing it holds. Tools running on the same PC, or anything using a copy of the same pairing file, work
+without sending a heartbeat of their own, until that PC shuts down. Then the phone drops the tunnel and
+refuses new ones until some host with that pairing heartbeats again. That's why this service runs its own
+heartbeat.
 
 ## Testing
 
