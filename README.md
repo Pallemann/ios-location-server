@@ -1,9 +1,10 @@
 # iOS Location Server
 
-Self-hosted, hands-free location simulation for an iPhone on your home Wi-Fi. A small Docker container
-on your server holds a simulated GPS location on the phone, with no cable and no desktop app running. You
-control it from a PWA on the phone itself: drag a pin on a map, and toggle the service and the fake
-location on and off.
+**Self-hosted location spoofing for iPhone, over Wi-Fi.**
+
+Fake your iPhone's GPS location from your own server: no jailbreak, no cable, no desktop app. A small
+Docker container holds a simulated location on the phone, and you control it from a PWA on the phone
+itself: drag a pin on a map, and toggle the service and the fake location on and off.
 
 <p align="center">
   <img src="docs/screenshot.png" width="300" alt="The PWA: Service and Fake location toggles, status Connected, and a map with the fake-location pin">
